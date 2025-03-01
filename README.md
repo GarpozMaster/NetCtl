@@ -11,15 +11,15 @@ Download the NetCtl script directly to `/bin/netctl` and make it executable:
 #### With curl
 
 ```bash
-sudo curl -L https://raw.githubusercontent.com/yourusername/netctl/main/netctl.sh -o /bin/netctl
-sudo chmod +x /bin/netctl
+sudo curl -L https://raw.githubusercontent.com/GarpozMaster/NetCtl/main/NetCtl.sh -o /bin/NetCtl
+sudo chmod +x /bin/NetCtl
 ```
 
 #### With wget
 
 ```bash
-sudo wget https://raw.githubusercontent.com/yourusername/netctl/main/netctl.sh -O /bin/netctl
-sudo chmod +x /bin/netctl
+sudo wget https://raw.githubusercontent.com/GarpozMaster/NetCtl/main/NetCtl.sh -O /bin/NetCtl
+sudo chmod +x /bin/NetCtl
 ```
 
 ### 2. Using Git Clone
@@ -27,13 +27,13 @@ sudo chmod +x /bin/netctl
 Alternatively, clone the repository and install NetCtl manually:
 
 ```bash
-git clone https://github.com/yourusername/netctl.git
-cd netctl
-sudo cp netctl.sh /bin/netctl
-sudo chmod +x /bin/netctl
+git clone https://github.com/GarpozMaster/NetCtl.git
+cd NetCtl
+sudo cp netctl.sh /bin/NetCtl
+sudo chmod +x /bin/NetCtl
 ```
 
-Now, you can run `netctl` from anywhere on your system!
+Now, you can run `NetCtl` from anywhere on your system!
 
 ## Features ✨
 
@@ -53,49 +53,49 @@ Now, you can run `netctl` from anywhere on your system!
 - **Save a Token:**  
   Save your API token to enable tunneling.
   ```bash
-  netctl token YOUR_API_TOKEN_HERE
+  NetCtl token YOUR_API_TOKEN_HERE
   ```
 
 - **Start a TCP Tunnel:**  
   Open a tunnel on the specified local port.
   ```bash
-  netctl tcp 8080
+  NetCtl tcp 8080
   ```
 
 - **Start an HTTP Tunnel (without Custom Domain):**  
   Open an HTTP tunnel on the specified port.
   ```bash
-  netctl http 8000
+  NetCtl http 8000
   ```
 
 - **Start an HTTP Tunnel with a Custom Domain:**  
   Open an HTTP tunnel and specify your custom domain.
   ```bash
-  netctl http 8000 -c example.com
+  NetCtl http 8000 -c example.com
   ```
 
 - **List Active Connections:**  
   Display all current tunnels.
   ```bash
-  netctl list
+  NetCtl list
   ```
 
 - **Stop a Specific Connection:**  
   Stop a tunnel using its connection ID.
   ```bash
-  netctl stop <connection_id>
+  NetCtl stop <connection_id>
   ```
 
 - **Stop All Connections:**  
   Shut down all active tunnels.
   ```bash
-  netctl stopall
+  NetCtl stopall
   ```
 
 - **Display Help:**  
   Show the detailed help message.
   ```bash
-  netctl help
+  NetCtl help
   ```
 
 ## Dependencies 🛠️
@@ -121,4 +121,4 @@ This project is licensed under the [MIT License](LICENSE).
 
 Happy tunneling! 🌐🚀
 
-Feel free to modify this README to suit your project's needs.
+Made with ❤️ by Garpoz Master
