@@ -113,6 +113,8 @@ If any dependencies are missing, the script will automatically attempt to instal
 
 Contributions, bug reports, and feature requests are very welcome! Feel free to fork the repository and open a pull request with your improvements.
 
+Windows & Mac support coming soon! 🖥️🍏
+
 ## License 📄
 
 This project is licensed under the [MIT License](LICENSE).
