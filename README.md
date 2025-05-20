@@ -55,7 +55,13 @@ Now, you can run `NetCtl` from anywhere on your system!
   ```bash
   NetCtl token YOUR_API_TOKEN_HERE
   ```
-
+  
+- **Login via Browser:**  
+  Authenticate through your browser to obtain a token automatically.
+  ```bash
+  NetCtl login
+  ```
+  
 - **Start a TCP Tunnel:**  
   Open a tunnel on the specified local port.
   ```bash
