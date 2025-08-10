@@ -73,10 +73,10 @@ Now you can run `NetCtl` from anywhere on your system.
   ```
 
 * **Start a TCP Tunnel from a Specific Local Host**
-  Example: Tunnel a service running on LAN IP `192.168.5.1`
+  Example: Tunnel a service running on LAN IP `192.168.1.1`
 
   ```bash
-  NetCtl tcp 192.168.5.1:8080
+  NetCtl tcp 192.168.1.1:8080
   ```
 
 * **Start an HTTP Tunnel**
@@ -88,7 +88,7 @@ Now you can run `NetCtl` from anywhere on your system.
 * **Start an HTTP Tunnel from a Specific Local Host**
 
   ```bash
-  NetCtl http 192.168.5.1:8000
+  NetCtl http 192.168.1.1:8000
   ```
 
 * **HTTP Tunnel with Custom Domain**
