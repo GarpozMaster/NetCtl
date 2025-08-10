@@ -69,12 +69,15 @@ EOF
 
         # Add sourcing to bashrc only if not already there
         if ! grep -q "bash_completion.d/netctl-completion.bash" "$HOME/.bashrc"; then
-            echo "" >> "$HOME/.bashrc"
-            echo "# NetCtl completion" >> "$HOME/.bashrc"
-            echo "if [ -f \"$completion_file\" ]; then" >> "$HOME/.bashrc"
-            echo "    source \"$completion_file\"" >> "$HOME/.bashrc"
-            echo "fi" >> "$HOME/.bashrc"
-            source ~/.bashrc
+            {
+              echo ""
+              echo "# NetCtl completion"
+              echo "if [ -f \"$completion_file\" ]; then"
+              echo "    source \"$completion_file\""
+              echo "fi"
+            } >> "$HOME/.bashrc"
+            # shellcheck disable=SC1090
+            source "$HOME/.bashrc"
         fi
     fi
 }
@@ -82,6 +85,7 @@ EOF
 # Function to detect OS and package manager
 detect_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
         . /etc/os-release
         OS=$NAME
         if command -v apt-get >/dev/null 2>&1; then
@@ -117,15 +121,9 @@ install_dependencies() {
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
             case $dep in
-                sshpass)
-                    to_install+=("sshpass")
-                    ;;
-                jq)
-                    to_install+=("jq")
-                    ;;
-                curl)
-                    to_install+=("curl")
-                    ;;
+                sshpass) to_install+=("sshpass") ;;
+                jq)      to_install+=("jq") ;;
+                curl)    to_install+=("curl") ;;
                 ssh)
                     if [ "$PKG_MANAGER" = "apt-get" ]; then
                         to_install+=("openssh-client")
@@ -147,10 +145,8 @@ install_dependencies() {
                 echo -e "${RED}Error: This script needs root access to install required packages${NC}"
                 exit 1
             fi
-            # Direct root execution
             $INSTALL_CMD "${to_install[@]}"
         else
-            # Use sudo
             echo -e "${CYAN}Installing required packages...${NC}"
             sudo $INSTALL_CMD "${to_install[@]}"
         fi
@@ -196,8 +192,8 @@ show_help() {
    echo -e "${CYAN}Usage:${NC}"
    echo -e "  $(basename "$0") ${GREEN}token${NC} <token>                         - Save the token"
    echo -e "  $(basename "$0") ${GREEN}login${NC}                                 - Login via browser to get token"
-   echo -e "  $(basename "$0") ${GREEN}tcp${NC} <port>                            - Run TCP tunneling"
-   echo -e "  $(basename "$0") ${GREEN}http${NC} <port> [-c <domain>]             - Run HTTP tunneling"
+   echo -e "  $(basename "$0") ${GREEN}tcp${NC} <[host:]port>                     - Run TCP tunneling"
+   echo -e "  $(basename "$0") ${GREEN}http${NC} <[host:]port> [-c <domain>]      - Run HTTP tunneling"
    echo -e "  $(basename "$0") ${GREEN}list${NC}                                  - List active connections"
    echo -e "  $(basename "$0") ${GREEN}stop${NC} <id>                             - Stop a specific connection"
    echo -e "  $(basename "$0") ${GREEN}stopall${NC}                               - Stop all connections"
@@ -221,7 +217,8 @@ browser_login() {
     local login_url="${hub_base}/login?uuid=${uuid_str}"
     local poll_interval=2
     local timeout_minutes=5
-    local start_time=$(date +%s)
+    local start_time
+    start_time=$(date +%s)
     local timeout_seconds=$((timeout_minutes * 60))
 
     echo -e "${CYAN}Initiating browser login...${NC}"
@@ -235,8 +232,9 @@ browser_login() {
 
     # Start polling for token
     while true; do
-        local current_time=$(date +%s)
-        local elapsed=$((current_time - start_time))
+        local current_time elapsed response login_status token
+        current_time=$(date +%s)
+        elapsed=$((current_time - start_time))
 
         if [ $elapsed -ge $timeout_seconds ]; then
             echo -e ""
@@ -244,16 +242,12 @@ browser_login() {
             return 1
         fi
 
-        # Poll the API
-        local response
         response=$(curl -s --connect-timeout 10 "${hub_base}/api/check-login/${uuid_str}")
 
         if [ $? -eq 0 ]; then
-            local login_status
             login_status=$(echo "$response" | jq -r '.login // false')
 
             if [ "$login_status" = "true" ]; then
-                local token
                 token=$(echo "$response" | jq -r '.connectionToken // empty')
 
                 if [ -n "$token" ] && [ "$token" != "null" ]; then
@@ -280,28 +274,16 @@ handle_api_response() {
     fi
 
     if [ "$status" = "error" ]; then
-        local error_code
-        local error_message
-
+        local error_code error_message
         error_code=$(echo "$response" | jq -r '.error.code' 2>/dev/null)
         error_message=$(echo "$response" | jq -r '.error.message' 2>/dev/null)
 
         case $error_code in
-            401)
-                echo -e "${RED}Error: Invalid token. Please get a new token from the dashboard.${NC}" >&2
-                ;;
-            403)
-                echo -e "${RED}Error: $error_message${NC}" >&2
-                ;;
-            404)
-                echo -e "${RED}Error: Domain not found or inactive.${NC}" >&2
-                ;;
-            503)
-                echo -e "${RED}Error: Service temporarily unavailable. Please try again later.${NC}" >&2
-                ;;
-            *)
-                echo -e "${RED}Error: Unknown error occurred - $error_message${NC}" >&2
-                ;;
+            401) echo -e "${RED}Error: Invalid token. Please get a new token from the dashboard.${NC}" >&2 ;;
+            403) echo -e "${RED}Error: $error_message${NC}" >&2 ;;
+            404) echo -e "${RED}Error: Domain not found or inactive.${NC}" >&2 ;;
+            503) echo -e "${RED}Error: Service temporarily unavailable. Please try again later.${NC}" >&2 ;;
+            *)   echo -e "${RED}Error: Unknown error occurred - $error_message${NC}" >&2 ;;
         esac
         return 1
     fi
@@ -329,35 +311,27 @@ get_connection_details() {
         -d "$request_data" \
         "https://api.netctl.net/connect-user")
 
-    [ -z "$response" ] && echo -e "${RED}Error: Empty API response${NC}" >&2 && return 1 || echo "$response" | jq . >/dev/null 2>&1 || { echo -e "${RED}Error: Invalid JSON response: '$response'${NC}" >&2; return 1; }
-
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: Failed to connect to the API.${NC}" >&2
-        return 1
-    fi
+    [ -z "$response" ] && { echo -e "${RED}Error: Empty API response${NC}" >&2; return 1; }
+    echo "$response" | jq . >/dev/null 2>&1 || { echo -e "${RED}Error: Invalid JSON response: '$response'${NC}" >&2; return 1; }
 
     # Check for error codes in the response
     local error_code
     error_code=$(echo "$response" | jq -r '.error.code // empty')
-
     if [ -n "$error_code" ]; then
         handle_api_response "$response"
         return 1
     fi
 
-    # Process successful response
+    # Prevent duplicate remote port in-use with a live PID
     if handle_api_response "$response"; then
-        local remote_port
+        local remote_port in_use=false
         remote_port=$(echo "$response" | jq -r '.data.port')
-        local in_use=false
 
         for conn_file in "$CONNECTIONS_DIR"/*.json; do
             if [ -f "$conn_file" ]; then
-                local existing_remote_port
+                local existing_remote_port existing_pid
                 existing_remote_port=$(jq -r '.remote_port' "$conn_file")
-                local existing_pid
                 existing_pid=$(jq -r '.pid' "$conn_file")
-
                 if [ "$existing_remote_port" = "$remote_port" ] && is_process_running "$existing_pid"; then
                     in_use=true
                     break
@@ -380,16 +354,17 @@ generate_connection_id() {
     printf "%05d" $((RANDOM % 100000))
 }
 
-# Function to save connection details
+# Function to save connection details (now stores local_host)
 save_connection_details() {
     local conn_id=$1
     local conn_type=$2
-    local local_port=$3
-    local remote_port=$4
-    local hostname=$5
-    local pid=$6
-    local custom_domain=$7
-    local endpoint=$8
+    local local_host=$3
+    local local_port=$4
+    local remote_port=$5
+    local hostname=$6
+    local pid=$7
+    local custom_domain=$8
+    local endpoint=$9
 
     mkdir -p "$CONNECTIONS_DIR"
     if [ -n "$custom_domain" ]; then
@@ -397,6 +372,7 @@ save_connection_details() {
 {
     "id": "$conn_id",
     "type": "$conn_type",
+    "local_host": "$local_host",
     "local_port": $local_port,
     "remote_port": $remote_port,
     "hostname": "$hostname",
@@ -411,6 +387,7 @@ EOF
 {
     "id": "$conn_id",
     "type": "$conn_type",
+    "local_host": "$local_host",
     "local_port": $local_port,
     "remote_port": $remote_port,
     "hostname": "$hostname",
@@ -430,7 +407,7 @@ verify_port_ready() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if ss -Htln | grep -q ":$port\b"; then
+        if ss -Htln 2>/dev/null | grep -q ":$port\b"; then
             return 0
         fi
         sleep 1
@@ -448,26 +425,25 @@ is_process_running() {
     return 1
 }
 
-# Modified SSH background function
+# SSH background runner now supports custom local_host
 run_ssh_background() {
     local conn_id=$1
     local user_pass=$2
-    local local_port=$3
-    local endpoint=$4
-    local hostname=$5
-    local remote_port=$6
-    local connection_type=$7
-    local custom_domain=$8
+    local local_host=$3
+    local local_port=$4
+    local endpoint=$5
+    local hostname=$6
+    local remote_port=$7
+    local connection_type=$8
+    local custom_domain=$9
     local max_retries=3
     local retry_delay=3
     local check_delay=2
 
-    local username
+    local username password
     username=$(echo "$user_pass" | base64 --decode | cut -d: -f1)
-    local password
     password=$(echo "$user_pass" | base64 --decode | cut -d: -f2)
 
-    # Export password for sshpass
     export SSHPASS="$password"
 
     # Retry loop for SSH connection
@@ -484,7 +460,7 @@ run_ssh_background() {
             -o ServerAliveCountMax=3 \
             -o ConnectTimeout=15 \
             "$username@$endpoint" \
-            -N -R "$([[ $connection_type == tcp ]] && echo "0.0.0.0:" || echo "")$remote_port:127.0.0.1:$local_port" \
+            -N -R "$([[ $connection_type == tcp ]] && echo "0.0.0.0:" || echo "")$remote_port:$local_host:$local_port" \
             >/dev/null 2>&1 &
 
         local pid=$!
@@ -495,11 +471,12 @@ run_ssh_background() {
         if is_process_running "$pid"; then
             sleep $check_delay
             if is_process_running "$pid"; then
-                save_connection_details "$conn_id" "$connection_type" "$local_port" "$remote_port" "$hostname" "$pid" "$custom_domain" "$endpoint"
+                save_connection_details "$conn_id" "$connection_type" "$local_host" "$local_port" "$remote_port" "$hostname" "$pid" "$custom_domain" "$endpoint"
 
                 echo -e "${GREEN}Connection started successfully!${NC}"
                 echo -e "${PURPLE}Connection ID: ${GOLD}$conn_id${NC}"
                 echo -e "${PURPLE}Type: ${GOLD}${connection_type}${NC}"
+                echo -e "${PURPLE}Local Host: ${GOLD}${local_host}${NC}"
                 echo -e "${PURPLE}Local Port: ${GOLD}${local_port}${NC}"
                 if [ -n "$custom_domain" ]; then
                     echo -e "${PURPLE}CNAME: ${CYAN}${endpoint}${NC}"
@@ -536,38 +513,31 @@ list_connections() {
    for conn_file in "$CONNECTIONS_DIR"/*.json; do
        [ -f "$conn_file" ] || continue
 
-       local conn_data
+       local conn_data conn_id conn_type local_host local_port remote_port hostname CNAME custom_domain pid started_at status
        conn_data=$(cat "$conn_file")
-       local conn_id
        conn_id=$(echo "$conn_data" | jq -r '.id')
-       local conn_type
        conn_type=$(echo "$conn_data" | jq -r '.type')
-       local local_port
+       local_host=$(echo "$conn_data" | jq -r '.local_host // "127.0.0.1"')
        local_port=$(echo "$conn_data" | jq -r '.local_port')
-       local remote_port
        remote_port=$(echo "$conn_data" | jq -r '.remote_port')
-       local hostname
        hostname=$(echo "$conn_data" | jq -r '.hostname')
-       local hostname
-       CNAME=$(echo "$conn_data" | jq -r '.CNAME')
-       local custom_domain
+       CNAME=$(echo "$conn_data" | jq -r '.CNAME // empty')
        custom_domain=$(echo "$conn_data" | jq -r '.custom_domain // empty')
-       local pid
        pid=$(echo "$conn_data" | jq -r '.pid')
-       local started_at
        started_at=$(echo "$conn_data" | jq -r '.started_at')
 
        if is_process_running "$pid"; then
-           local status="${GREEN}ACTIVE${NC}"
+           status="${GREEN}ACTIVE${NC}"
        else
-           local status="${RED}DEAD${NC}"
+           status="${RED}DEAD${NC}"
            # Clean up dead connection
-           rm "$conn_file"
+           rm -f "$conn_file"
            continue
        fi
 
        echo -e "${PURPLE}ID: ${GOLD}$conn_id${NC}"
        echo -e "${PURPLE}Type: ${GOLD}$conn_type${NC}"
+       echo -e "${PURPLE}Local Host: ${GOLD}$local_host${NC}"
        echo -e "${PURPLE}Local Port: ${GOLD}$local_port${NC}"
        if [ -n "$custom_domain" ]; then
            echo -e "${PURPLE}CNAME: ${CYAN}${CNAME}${NC}"
@@ -595,7 +565,7 @@ stop_connection() {
     fi
 
     local pid
-    pid=$(cat "$conn_file" | jq -r '.pid')
+    pid=$(jq -r '.pid' "$conn_file")
 
     if is_process_running "$pid"; then
         kill "$pid" 2>/dev/null
@@ -608,7 +578,7 @@ stop_connection() {
         echo -e "${YELLOW}Connection $conn_id was already dead.${NC}"
     fi
 
-    rm "$conn_file"
+    rm -f "$conn_file"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Stopped tunnel: $conn_id (PID: $pid)" >> "$CONNECTIONS_LOG"
 }
 
@@ -656,7 +626,8 @@ main() {
         tcp|http)
             local command="$1"
             shift
-            local port=""
+            local local_host="127.0.0.1"
+            local local_port=""
             local custom_domain=""
 
             while [ $# -gt 0 ]; do
@@ -666,12 +637,19 @@ main() {
                             echo -e "${RED}Error: Custom domain can only be used with HTTP connections${NC}"
                             exit 1
                         fi
+                        [ -z "$2" ] && { echo -e "${RED}Error: Missing value for -c/--custom_domain${NC}"; exit 1; }
                         custom_domain="$2"
                         shift 2
                         ;;
                     *)
-                        if [ -z "$port" ]; then
-                            port="$1"
+                        if [ -z "$local_port" ]; then
+                            # Accept PORT or HOST:PORT
+                            if [[ "$1" == *:* ]]; then
+                                local_host="${1%%:*}"
+                                local_port="${1##*:}"
+                            else
+                                local_port="$1"
+                            fi
                             shift
                         else
                             echo -e "${RED}Error: Unexpected argument '$1'${NC}"
@@ -682,8 +660,8 @@ main() {
                 esac
             done
 
-            if ! [[ "$port" =~ ^[1-9][0-9]*$ ]] || [ "$port" -gt 65535 ]; then
-                echo -e "${RED}Error: Invalid port number. Port must be a number between 1 and 65535.${NC}"
+            if ! [[ "$local_port" =~ ^[1-9][0-9]*$ ]] || [ "$local_port" -gt 65535 ]; then
+                echo -e "${RED}Error: Invalid port. Use a number between 1 and 65535.${NC}"
                 show_help
                 exit 1
             fi
@@ -691,22 +669,17 @@ main() {
             check_token_exists
             check_internet || exit 1
 
-            local response
+            local response endpoint hostname remote_port conn_id token
             response=$(get_connection_details "$command" "$custom_domain") || exit 1
 
-            local endpoint
             endpoint=$(echo "$response" | jq -r '.data.endpoint')
-            local hostname
             hostname=$(echo "$response" | jq -r '.data.hostname')
-            local remote_port
             remote_port=$(echo "$response" | jq -r '.data.port')
 
-            local conn_id
             conn_id=$(generate_connection_id)
-            local token
             token=$(cat "$TOKEN_FILE")
 
-            run_ssh_background "$conn_id" "$token" "$port" "$endpoint" "$hostname" "$remote_port" "$command" "$custom_domain"
+            run_ssh_background "$conn_id" "$token" "$local_host" "$local_port" "$endpoint" "$hostname" "$remote_port" "$command" "$custom_domain"
             ;;
         list)
             list_connections
