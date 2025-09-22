@@ -49,9 +49,21 @@ _netctl_complete() {
                 COMPREPLY=( $(compgen -W "$active_ids" -- "$cur") )
             fi
             ;;
-        "tcp"|"http")
+        "tcp")
             local ports="80 443 3000 3306 5432 8000 8080 8443 9000"
-            COMPREPLY=( $(compgen -W "$ports" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$ports -s" -- "$cur") )
+            ;;
+        "http")
+            local ports="80 443 3000 3306 5432 8000 8080 8443 9000"
+            COMPREPLY=( $(compgen -W "$ports -c" -- "$cur") )
+            ;;
+        "-s"|"--service")
+            # Service name completion
+            COMPREPLY=()
+            ;;
+        "-c"|"--custom_domain")
+            # Domain completion
+            COMPREPLY=()
             ;;
         *)
             COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
@@ -124,6 +136,7 @@ install_dependencies() {
                 sshpass) to_install+=("sshpass") ;;
                 jq)      to_install+=("jq") ;;
                 curl)    to_install+=("curl") ;;
+                qrencode) to_install+=("qrencode") ;;
                 ssh)
                     if [ "$PKG_MANAGER" = "apt-get" ]; then
                         to_install+=("openssh-client")
@@ -175,7 +188,24 @@ check_internet() {
 # Function to check dependencies
 check_dependencies() {
     local required_deps=("jq" "sshpass" "curl" "ssh")
+    local optional_deps=("qrencode")
+
     install_dependencies "${required_deps[@]}"
+
+    # Try to install optional dependencies but don't fail if they can't be installed
+    for dep in "${optional_deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            echo -e "${YELLOW}Optional: Installing $dep for QR code support...${NC}"
+            case $dep in
+                qrencode)
+                    if command -v sudo >/dev/null 2>&1; then
+                        sudo $INSTALL_CMD qrencode 2>/dev/null || echo -e "${YELLOW}Could not install qrencode - QR codes will not be available${NC}"
+                    fi
+                    ;;
+            esac
+        fi
+    done
+
     create_completion_script
 }
 
@@ -192,7 +222,7 @@ show_help() {
    echo -e "${CYAN}Usage:${NC}"
    echo -e "  $(basename "$0") ${GREEN}token${NC} <token>                         - Save the token"
    echo -e "  $(basename "$0") ${GREEN}login${NC}                                 - Login via browser to get token"
-   echo -e "  $(basename "$0") ${GREEN}tcp${NC} <[host:]port>                     - Run TCP tunneling"
+   echo -e "  $(basename "$0") ${GREEN}tcp${NC} <[host:]port> [-s <service>]      - Run TCP tunneling (with optional service name)"
    echo -e "  $(basename "$0") ${GREEN}http${NC} <[host:]port> [-c <domain>]      - Run HTTP tunneling"
    echo -e "  $(basename "$0") ${GREEN}list${NC}                                  - List active connections"
    echo -e "  $(basename "$0") ${GREEN}stop${NC} <id>                             - Stop a specific connection"
@@ -209,7 +239,7 @@ save_token() {
     echo -e "${GREEN}Token saved successfully.${NC}"
 }
 
-# Function to handle browser login flow
+# Function to handle browser login flow with QR code
 browser_login() {
     local hub_base="https://hub.netctl.net"
     local uuid_str
@@ -225,7 +255,20 @@ browser_login() {
     echo -e ""
     echo -e "${PURPLE}UUID: ${GOLD}${uuid_str}${NC}"
     echo -e ""
-    echo -e "${YELLOW}Please open this URL in your browser and complete the CAPTCHA + TOTP:${NC}"
+
+    # Generate and display QR code if qrencode is available
+    if command -v qrencode >/dev/null 2>&1; then
+        echo -e "${CYAN}Scan this QR code to login:${NC}"
+        echo -e ""
+        qrencode -t UTF8 "$login_url" 2>/dev/null || {
+            echo -e "${YELLOW}QR code generation failed, using URL instead.${NC}"
+        }
+        echo -e ""
+        echo -e "${PURPLE}Or open this URL manually:${NC}"
+    else
+        echo -e "${YELLOW}Please open this URL in your browser and complete the CAPTCHA + TOTP:${NC}"
+    fi
+
     echo -e "${CYAN}${login_url}${NC}"
     echo -e ""
     echo -e "${PURPLE}Waiting for login to complete (up to ${timeout_minutes} minutes)...${NC}"
@@ -295,12 +338,17 @@ handle_api_response() {
 get_connection_details() {
     local connection_type=$1
     local custom_domain=$2
+    local service_name=$3
     local token
     token=$(cat "$TOKEN_FILE")
 
     local request_data
-    if [ -n "$custom_domain" ]; then
+    if [ -n "$custom_domain" ] && [ -n "$service_name" ]; then
+        request_data="{\"Token\":\"$token\", \"Connection-Type\":\"$connection_type\", \"domain\":\"$custom_domain\", \"service_name\":\"$service_name\"}"
+    elif [ -n "$custom_domain" ]; then
         request_data="{\"Token\":\"$token\", \"Connection-Type\":\"$connection_type\", \"domain\":\"$custom_domain\"}"
+    elif [ -n "$service_name" ]; then
+        request_data="{\"Token\":\"$token\", \"Connection-Type\":\"$connection_type\", \"service_name\":\"$service_name\"}"
     else
         request_data="{\"Token\":\"$token\", \"Connection-Type\":\"$connection_type\"}"
     fi
@@ -354,7 +402,156 @@ generate_connection_id() {
     printf "%05d" $((RANDOM % 100000))
 }
 
-# Function to save connection details (now stores local_host)
+# Function to check if service name is already in use
+check_service_conflict() {
+    local service_name=$1
+
+    if [ ! -d "$CONNECTIONS_DIR" ]; then
+        return 0  # No conflicts if no connections directory
+    fi
+
+    for conn_file in "$CONNECTIONS_DIR"/*.json; do
+        [ -f "$conn_file" ] || continue
+
+        local existing_service_name
+        existing_service_name=$(jq -r '.service_name // empty' "$conn_file" 2>/dev/null)
+
+        if [ "$existing_service_name" = "$service_name" ]; then
+            local conn_id status
+            conn_id=$(jq -r '.id' "$conn_file")
+            status=$(jq -r '.status // "active"' "$conn_file")
+
+            case "$status" in
+                "active"|"reconnecting")
+                    echo -e "${RED}Error: Service '$service_name' already exists (Connection ID: $conn_id, Status: $status)${NC}"
+                    echo -e "${YELLOW}Use 'NetCtl stop $conn_id' to stop the existing connection first.${NC}"
+                    return 1
+                    ;;
+                "failed")
+                    # Remove failed service and allow new connection
+                    rm -f "$conn_file"
+                    return 0
+                    ;;
+            esac
+        fi
+    done
+
+    return 0  # No conflict found
+}
+
+# Improved auto-watcher function for service connections
+start_auto_watcher() {
+    local conn_id=$1
+    local service_name=$2
+    local local_host=$3
+    local local_port=$4
+    local token=$5
+
+    (
+        local check_interval=15  # Check more frequently
+        local max_failures=10   # More attempts
+        local failure_count=0
+        local conn_file="$CONNECTIONS_DIR/$conn_id.json"
+
+        sleep 5  # Short initial delay
+
+        while [ -f "$conn_file" ] && [ $failure_count -lt $max_failures ]; do
+            local current_pid
+            current_pid=$(jq -r '.pid // empty' "$conn_file" 2>/dev/null)
+
+            # Check if SSH process is dead
+            if [ -n "$current_pid" ] && ! kill -0 "$current_pid" 2>/dev/null; then
+                # Mark as reconnecting
+                local temp_file
+                temp_file=$(mktemp)
+                jq '.status = "reconnecting"' "$conn_file" > "$temp_file" && mv "$temp_file" "$conn_file"
+
+                # Connection died, attempt reconnect
+                local request_data="{\"Token\":\"$token\", \"Connection-Type\":\"tcp\", \"service_name\":\"$service_name\"}"
+                local response
+                response=$(curl -s -X POST \
+                    -H "Content-Type: application/json" \
+                    -d "$request_data" \
+                    "https://api.netctl.net/connect-user" 2>/dev/null)
+
+                if [ $? -eq 0 ] && echo "$response" | jq -e '.data' >/dev/null 2>&1; then
+                    local new_endpoint new_hostname new_remote_port
+                    new_endpoint=$(echo "$response" | jq -r '.data.endpoint')
+                    new_hostname=$(echo "$response" | jq -r '.data.hostname')
+                    new_remote_port=$(echo "$response" | jq -r '.data.port')
+
+                    # Start new SSH connection
+                    local username password
+                    username=$(echo "$token" | base64 --decode | cut -d: -f1)
+                    password=$(echo "$token" | base64 --decode | cut -d: -f2)
+
+                    export SSHPASS="$password"
+                    sshpass -e ssh -p 8522 \
+                        -o StrictHostKeyChecking=no \
+                        -o ExitOnForwardFailure=yes \
+                        -o ServerAliveCountMax=3 \
+                        -o ConnectTimeout=15 \
+                        -o ServerAliveInterval=10 \
+                        "$username@$new_endpoint" \
+                        -N -R "0.0.0.0:$new_remote_port:$local_host:$local_port" \
+                        >/dev/null 2>&1 &
+
+                    local new_pid=$!
+                    unset SSHPASS
+
+                    sleep 3
+
+                    if kill -0 "$new_pid" 2>/dev/null; then
+                        # Update connection file with new details
+                        temp_file=$(mktemp)
+                        jq --arg pid "$new_pid" \
+                           --arg endpoint "$new_endpoint" \
+                           --arg hostname "$new_hostname" \
+                           --arg port "$new_remote_port" \
+                           --arg reconnected "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+                           '.pid = ($pid | tonumber) | .hostname = $hostname | .remote_port = ($port | tonumber) | .reconnected_at = $reconnected | .status = "active"' \
+                           "$conn_file" > "$temp_file" && mv "$temp_file" "$conn_file"
+
+                        failure_count=0  # Reset failure count on success
+                    else
+                        failure_count=$((failure_count + 1))
+                        sleep 5
+                    fi
+                else
+                    failure_count=$((failure_count + 1))
+                    sleep 5
+                fi
+            fi
+
+            sleep $check_interval
+        done
+
+        # If we exit the loop due to max failures, mark as failed
+        if [ $failure_count -ge $max_failures ] && [ -f "$conn_file" ]; then
+            temp_file=$(mktemp)
+            jq '.status = "failed" | .auto_reconnect = false' "$conn_file" > "$temp_file" && mv "$temp_file" "$conn_file"
+        fi
+    ) &
+
+    # Save watcher PID to connection file
+    local watcher_pid=$!
+    local temp_file
+    temp_file=$(mktemp)
+    jq --arg wpid "$watcher_pid" '.watcher_pid = ($wpid | tonumber)' "$CONNECTIONS_DIR/$conn_id.json" > "$temp_file" && mv "$temp_file" "$CONNECTIONS_DIR/$conn_id.json"
+}
+
+# Function to stop watcher when connection is stopped
+stop_auto_watcher() {
+    local conn_file=$1
+    local watcher_pid
+    watcher_pid=$(jq -r '.watcher_pid // empty' "$conn_file" 2>/dev/null)
+
+    if [ -n "$watcher_pid" ] && kill -0 "$watcher_pid" 2>/dev/null; then
+        kill "$watcher_pid" 2>/dev/null
+    fi
+}
+
+# Function to save connection details
 save_connection_details() {
     local conn_id=$1
     local conn_type=$2
@@ -365,9 +562,29 @@ save_connection_details() {
     local pid=$7
     local custom_domain=$8
     local endpoint=$9
+    local service_name=${10}
 
     mkdir -p "$CONNECTIONS_DIR"
-    if [ -n "$custom_domain" ]; then
+
+    if [ -n "$custom_domain" ] && [ -n "$service_name" ]; then
+        cat > "$CONNECTIONS_DIR/$conn_id.json" << EOF
+{
+    "id": "$conn_id",
+    "type": "$conn_type",
+    "local_host": "$local_host",
+    "local_port": $local_port,
+    "remote_port": $remote_port,
+    "hostname": "$hostname",
+    "CNAME": "$endpoint",
+    "custom_domain": "$custom_domain",
+    "service_name": "$service_name",
+    "pid": $pid,
+    "auto_reconnect": true,
+    "status": "active",
+    "started_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+    elif [ -n "$custom_domain" ]; then
         cat > "$CONNECTIONS_DIR/$conn_id.json" << EOF
 {
     "id": "$conn_id",
@@ -379,6 +596,23 @@ save_connection_details() {
     "CNAME": "$endpoint",
     "custom_domain": "$custom_domain",
     "pid": $pid,
+    "status": "active",
+    "started_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+    elif [ -n "$service_name" ]; then
+        cat > "$CONNECTIONS_DIR/$conn_id.json" << EOF
+{
+    "id": "$conn_id",
+    "type": "$conn_type",
+    "local_host": "$local_host",
+    "local_port": $local_port,
+    "remote_port": $remote_port,
+    "hostname": "$hostname",
+    "service_name": "$service_name",
+    "pid": $pid,
+    "auto_reconnect": true,
+    "status": "active",
     "started_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
@@ -392,6 +626,7 @@ EOF
     "remote_port": $remote_port,
     "hostname": "$hostname",
     "pid": $pid,
+    "status": "active",
     "started_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
@@ -425,7 +660,7 @@ is_process_running() {
     return 1
 }
 
-# SSH background runner now supports custom local_host
+# SSH background runner with service name support and auto-watcher
 run_ssh_background() {
     local conn_id=$1
     local user_pass=$2
@@ -436,6 +671,7 @@ run_ssh_background() {
     local remote_port=$7
     local connection_type=$8
     local custom_domain=$9
+    local service_name=${10}
     local max_retries=3
     local retry_delay=3
     local check_delay=2
@@ -459,6 +695,7 @@ run_ssh_background() {
             -o ExitOnForwardFailure=yes \
             -o ServerAliveCountMax=3 \
             -o ConnectTimeout=15 \
+            -o ServerAliveInterval=10 \
             "$username@$endpoint" \
             -N -R "$([[ $connection_type == tcp ]] && echo "0.0.0.0:" || echo "")$remote_port:$local_host:$local_port" \
             >/dev/null 2>&1 &
@@ -471,11 +708,19 @@ run_ssh_background() {
         if is_process_running "$pid"; then
             sleep $check_delay
             if is_process_running "$pid"; then
-                save_connection_details "$conn_id" "$connection_type" "$local_host" "$local_port" "$remote_port" "$hostname" "$pid" "$custom_domain" "$endpoint"
+                save_connection_details "$conn_id" "$connection_type" "$local_host" "$local_port" "$remote_port" "$hostname" "$pid" "$custom_domain" "$endpoint" "$service_name"
+
+                # Start auto-watcher for service connections
+                if [ -n "$service_name" ]; then
+                    start_auto_watcher "$conn_id" "$service_name" "$local_host" "$local_port" "$user_pass"
+                fi
 
                 echo -e "${GREEN}Connection started successfully!${NC}"
                 echo -e "${PURPLE}Connection ID: ${GOLD}$conn_id${NC}"
                 echo -e "${PURPLE}Type: ${GOLD}${connection_type}${NC}"
+                if [ -n "$service_name" ]; then
+                    echo -e "${PURPLE}Service: ${GOLD}${service_name}${NC} ${GREEN}(Auto-reconnect enabled)${NC}"
+                fi
                 echo -e "${PURPLE}Local Host: ${GOLD}${local_host}${NC}"
                 echo -e "${PURPLE}Local Port: ${GOLD}${local_port}${NC}"
                 if [ -n "$custom_domain" ]; then
@@ -500,7 +745,7 @@ run_ssh_background() {
     return 1
 }
 
-# Function to list active connections
+# Fixed function to list active connections
 list_connections() {
    if [ ! -d "$CONNECTIONS_DIR" ] || [ -z "$(ls -A "$CONNECTIONS_DIR")" ]; then
        echo -e "${GOLD}No active connections.${NC}"
@@ -513,7 +758,7 @@ list_connections() {
    for conn_file in "$CONNECTIONS_DIR"/*.json; do
        [ -f "$conn_file" ] || continue
 
-       local conn_data conn_id conn_type local_host local_port remote_port hostname CNAME custom_domain pid started_at status
+       local conn_data conn_id conn_type local_host local_port remote_port hostname CNAME custom_domain service_name auto_reconnect status_field pid started_at status
        conn_data=$(cat "$conn_file")
        conn_id=$(echo "$conn_data" | jq -r '.id')
        conn_type=$(echo "$conn_data" | jq -r '.type')
@@ -523,20 +768,39 @@ list_connections() {
        hostname=$(echo "$conn_data" | jq -r '.hostname')
        CNAME=$(echo "$conn_data" | jq -r '.CNAME // empty')
        custom_domain=$(echo "$conn_data" | jq -r '.custom_domain // empty')
+       service_name=$(echo "$conn_data" | jq -r '.service_name // empty')
+       auto_reconnect=$(echo "$conn_data" | jq -r '.auto_reconnect // false')
+       status_field=$(echo "$conn_data" | jq -r '.status // "active"')
        pid=$(echo "$conn_data" | jq -r '.pid')
        started_at=$(echo "$conn_data" | jq -r '.started_at')
 
        if is_process_running "$pid"; then
            status="${GREEN}ACTIVE${NC}"
        else
-           status="${RED}DEAD${NC}"
-           # Clean up dead connection
-           rm -f "$conn_file"
-           continue
+           # For service connections with auto-reconnect, check status field
+           if [ -n "$service_name" ] && [ "$auto_reconnect" = "true" ]; then
+               case "$status_field" in
+                   "reconnecting") status="${YELLOW}RECONNECTING${NC}" ;;
+                   "failed") status="${RED}FAILED${NC}" ;;
+                   *) status="${YELLOW}RECONNECTING${NC}" ;;
+               esac
+           else
+               status="${RED}DEAD${NC}"
+               # Only clean up non-service connections
+               rm -f "$conn_file"
+               continue
+           fi
        fi
 
        echo -e "${PURPLE}ID: ${GOLD}$conn_id${NC}"
        echo -e "${PURPLE}Type: ${GOLD}$conn_type${NC}"
+       if [ -n "$service_name" ]; then
+           if [ "$auto_reconnect" = "true" ]; then
+               echo -e "${PURPLE}Service: ${GOLD}$service_name${NC} ${GREEN}(Auto-reconnect)${NC}"
+           else
+               echo -e "${PURPLE}Service: ${GOLD}$service_name${NC}"
+           fi
+       fi
        echo -e "${PURPLE}Local Host: ${GOLD}$local_host${NC}"
        echo -e "${PURPLE}Local Port: ${GOLD}$local_port${NC}"
        if [ -n "$custom_domain" ]; then
@@ -563,6 +827,9 @@ stop_connection() {
         echo -e "${RED}Error: Connection ID not found.${NC}"
         return 1
     fi
+
+    # Stop auto-watcher if it exists
+    stop_auto_watcher "$conn_file"
 
     local pid
     pid=$(jq -r '.pid' "$conn_file")
@@ -629,6 +896,7 @@ main() {
             local local_host="127.0.0.1"
             local local_port=""
             local custom_domain=""
+            local service_name=""
 
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -639,6 +907,15 @@ main() {
                         fi
                         [ -z "$2" ] && { echo -e "${RED}Error: Missing value for -c/--custom_domain${NC}"; exit 1; }
                         custom_domain="$2"
+                        shift 2
+                        ;;
+                    -s|--service)
+                        if [ "$command" != "tcp" ]; then
+                            echo -e "${RED}Error: Service name can only be used with TCP connections${NC}"
+                            exit 1
+                        fi
+                        [ -z "$2" ] && { echo -e "${RED}Error: Missing value for -s/--service${NC}"; exit 1; }
+                        service_name="$2"
                         shift 2
                         ;;
                     *)
@@ -666,11 +943,16 @@ main() {
                 exit 1
             fi
 
+            # Check for service name conflicts before proceeding
+            if [ -n "$service_name" ]; then
+                check_service_conflict "$service_name" || exit 1
+            fi
+
             check_token_exists
             check_internet || exit 1
 
             local response endpoint hostname remote_port conn_id token
-            response=$(get_connection_details "$command" "$custom_domain") || exit 1
+            response=$(get_connection_details "$command" "$custom_domain" "$service_name") || exit 1
 
             endpoint=$(echo "$response" | jq -r '.data.endpoint')
             hostname=$(echo "$response" | jq -r '.data.hostname')
@@ -679,7 +961,7 @@ main() {
             conn_id=$(generate_connection_id)
             token=$(cat "$TOKEN_FILE")
 
-            run_ssh_background "$conn_id" "$token" "$local_host" "$local_port" "$endpoint" "$hostname" "$remote_port" "$command" "$custom_domain"
+            run_ssh_background "$conn_id" "$token" "$local_host" "$local_port" "$endpoint" "$hostname" "$remote_port" "$command" "$custom_domain" "$service_name"
             ;;
         list)
             list_connections
