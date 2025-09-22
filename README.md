@@ -2,11 +2,13 @@
 
 NetCtl is an open-source, ready-to-run service that effortlessly exposes your localhost to the internet. Powered by SSH, it runs in the background and is fully controllable via simple commands—perfect for developers and remote access enthusiasts alike.
 
+---
+
 ## Installation 📥
 
 ### 1. Using curl (or wget)
 
-Download the NetCtl script directly to `/bin/netctl` and make it executable:
+Download the NetCtl script directly to `/bin/NetCtl` and make it executable:
 
 #### With curl
 
@@ -27,7 +29,7 @@ sudo chmod +x /bin/NetCtl
 ```bash
 git clone https://github.com/GarpozMaster/NetCtl.git
 cd NetCtl
-sudo cp netctl.sh /bin/NetCtl
+sudo cp NetCtl.sh /bin/NetCtl
 sudo chmod +x /bin/NetCtl
 ```
 
@@ -45,10 +47,14 @@ Now you can run `NetCtl` from anywhere on your system.
   Secure tunnels over SSH that run quietly in the background.
 * **Dynamic Connection Management** 🛑
   List, stop, and control active tunnels easily.
+* **Service Mode with Auto-Reconnect & Static Port** ♻️
+  Run TCP tunnels with `-s <service_name>` so they automatically reconnect **and keep the same remote port**. Perfect for long-running services like APIs and databases.
 * **Automatic Dependency Handling** 🛠️
   Detects your OS and installs required packages automatically.
 * **Shell Auto-Completion** ⌨️
   Get faster with built-in command completion.
+* **QR Code Login** 📱
+  you can log in by scanning a QR code from your terminal.
 
 ---
 
@@ -77,6 +83,13 @@ Now you can run `NetCtl` from anywhere on your system.
 
   ```bash
   NetCtl tcp 192.168.1.1:8080
+  ```
+
+* **Start a TCP Tunnel in Service Mode (auto-reconnect + static port)**
+  In service mode, NetCtl automatically reconnects while reusing the same remote port, ensuring your endpoint stays stable.:
+
+  ```bash
+  NetCtl tcp 8080 -s my-service
   ```
 
 * **Start an HTTP Tunnel**
@@ -152,5 +165,4 @@ This project is licensed under the [MIT License](LICENSE).
 ---
 
 Happy tunneling! 🌐🚀
-
 Made with ❤️ by Garpoz Master
